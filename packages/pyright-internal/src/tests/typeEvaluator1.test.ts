@@ -17,6 +17,7 @@ import {
     pythonVersion3_10,
     pythonVersion3_11,
     pythonVersion3_13,
+    pythonVersion3_14,
     pythonVersion3_7,
     pythonVersion3_8,
     pythonVersion3_9,
@@ -1196,4 +1197,52 @@ test('AssignmentExpr8', () => {
 test('AssignmentExpr9', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['assignmentExpr9.py']);
     TestUtils.validateResults(analysisResults, 0);
+});
+
+test('FieldKey0', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldKey0.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 0, 0);
+});
+
+test('FieldKey1', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldKey1.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 8, 0);
+});
+
+test('FieldKey2', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldKey2.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 6, 0);
+});
+
+test('FieldType1', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldType1.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 5, 0);
+});
+
+test('FieldType2', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldType2.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 0, 0);
+});
+
+test('FieldType3', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldType3.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 3, 0);
 });

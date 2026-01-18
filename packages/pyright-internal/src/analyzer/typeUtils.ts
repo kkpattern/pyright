@@ -73,6 +73,76 @@ import {
     Variance,
 } from './types';
 import { TypeWalker } from './typeWalker';
+import * as SchemaUtils from './schemaUtils';
+
+// Resolves FieldKey[T] to a Literal union after type variable substitution.
+// If the type argument is still a TypeVar or cannot be resolved to a schema type,
+// returns the original ClassType.
+export function resolveFieldKeyOrFieldType(classType: ClassType): Type {
+    if (!ClassType.isBuiltIn(classType, ['FieldKey', 'FieldType'])) {
+        return classType;
+    }
+
+    const typeArgs = classType.priv.typeArgs;
+    if (!typeArgs || typeArgs.length === 0) {
+        return classType;
+    }
+
+    const isFieldKey = ClassType.isBuiltIn(classType, 'FieldKey');
+
+    if (isFieldKey) {
+        // FieldKey[T] - resolve to literal union of field names
+        const typeArg = typeArgs[0];
+
+        // If the type argument still requires specialization (contains TypeVars),
+        // we cannot resolve yet - return the specialized form
+        if (requiresSpecialization(typeArg)) {
+            return classType;
+        }
+
+        // Try to get schema field names
+        // Note: We pass undefined for evaluator since getSchemaFieldNames
+        // can work without it for most cases. For TypedDict we may need
+        // to handle this differently.
+        const schemaNames = SchemaUtils.getSchemaFieldNamesWithoutEvaluator(typeArg);
+        if (schemaNames === undefined) {
+            // Not a schema type - return the specialized form and let
+            // the type checker report an error at validation time
+            return classType;
+        }
+
+        if (schemaNames.length === 0) {
+            return NeverType.createNever();
+        }
+
+        // Build Literal union of field names
+        const literalTypes = schemaNames.map((name) => {
+            return ClassType.cloneWithLiteral(classType, name);
+        });
+        return combineTypes(literalTypes);
+    } else {
+        // FieldType[T, K] - resolve to union of field types
+        if (typeArgs.length < 2) {
+            return classType;
+        }
+
+        const targetType = typeArgs[0];
+        const keyType = typeArgs[1];
+
+        // If target argument still requires specialization, we still try to resolve
+        // the field type, because getSchemaFieldTypeForKey can handle unbound TypeVars
+        // by using buildSolutionFromSpecializedClass and applySolvedTypeVars.
+        // We only skip resolution if the target type is not a valid schema type.
+
+        // Get the field type(s) for the given key(s)
+        const fieldType = SchemaUtils.getSchemaFieldTypeForKey(targetType, keyType);
+        if (fieldType === undefined) {
+            return classType;
+        }
+
+        return fieldType;
+    }
+}
 
 export interface ClassMember {
     // Symbol
@@ -3791,13 +3861,21 @@ export class TypeVarTransformer {
             return classType;
         }
 
-        return ClassType.specialize(
+        let result: Type = ClassType.specialize(
             classType,
             newTypeArgs,
             isTypeArgExplicit,
             /* includeSubclasses */ undefined,
             newTupleTypeArgs
         );
+
+        // After type variable substitution, resolve FieldKey[T] or FieldType[T, K] to
+        // their concrete types if the type argument is now a schema type.
+        if (isClass(result) && ClassType.isBuiltIn(result, ['FieldKey', 'FieldType'])) {
+            result = resolveFieldKeyOrFieldType(result);
+        }
+
+        return result;
     }
 
     transformTypeVarsInFunctionType(sourceType: FunctionType, recursionCount: number): FunctionType | OverloadedType {

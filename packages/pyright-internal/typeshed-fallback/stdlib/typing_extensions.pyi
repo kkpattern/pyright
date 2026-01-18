@@ -123,6 +123,8 @@ __all__ = [
     "disjoint_base",
     "Doc",
     "evaluate_forward_ref",
+    "FieldKey",
+    "FieldType",
     "get_overloads",
     "final",
     "Format",
@@ -348,8 +350,7 @@ else:
     NotRequired: _SpecialForm
     LiteralString: _SpecialForm
     Unpack: _SpecialForm
-
-    def dataclass_transform(
+        def dataclass_transform(
         *,
         eq_default: bool = True,
         order_default: bool = False,
@@ -582,8 +583,10 @@ else:
 
 # TypeAliasType was added in Python 3.12, but had significant changes in 3.14.
 if sys.version_info >= (3, 14):
-    from typing import TypeAliasType as TypeAliasType
+    from typing import FieldKey as FieldKey, FieldType as FieldType, TypeAliasType as TypeAliasType
 else:
+    FieldKey: _SpecialForm
+    FieldType: _SpecialForm
     @final
     class TypeAliasType:
         def __init__(

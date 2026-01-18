@@ -111,7 +111,7 @@ __all__ = [
 ]
 
 if sys.version_info >= (3, 14):
-    __all__ += ["evaluate_forward_ref"]
+    __all__ += ["evaluate_forward_ref", "FieldKey", "FieldType"]
 
 if sys.version_info >= (3, 10):
     __all__ += ["Concatenate", "ParamSpec", "ParamSpecArgs", "ParamSpecKwargs", "TypeAlias", "TypeGuard", "is_typeddict"]
@@ -252,6 +252,10 @@ if sys.version_info >= (3, 11):
     Required: _SpecialForm
     NotRequired: _SpecialForm
     LiteralString: _SpecialForm
+
+    if sys.version_info >= (3, 14):
+        FieldKey: _SpecialForm
+        FieldType: _SpecialForm
 
     @final
     class TypeVarTuple:

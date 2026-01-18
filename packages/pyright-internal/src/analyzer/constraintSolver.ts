@@ -63,6 +63,7 @@ import {
     makePacked,
     makeUnpacked,
     mapSubtypes,
+    resolveFieldKeyOrFieldType,
     simplifyFunctionToParamSpec,
     sortTypes,
     specializeTupleClass,
@@ -945,14 +946,30 @@ function assignUnconstrainedTypeVar(
             return false;
         }
 
-        // In general, bound types cannot be generic, but the "Self" type is an
-        // exception. In this case, we need to use the original constraints
-        // to solve for the generic type variable(s) in the bound type.
-        const effectiveConstraints = TypeVarType.isSelf(destType) ? constraints : undefined;
+        // In general, bound types cannot be generic, but the "Self" type and
+        // FieldKey/FieldType are exceptions. In these cases, we need to use
+        // the original constraints to solve for the generic type variable(s)
+        // in the bound type.
+        const isFieldKeyOrFieldType =
+            isClass(destType.shared.boundType) &&
+            ClassType.isBuiltIn(destType.shared.boundType, ['FieldKey', 'FieldType']);
+        const effectiveConstraints = TypeVarType.isSelf(destType) || isFieldKeyOrFieldType ? constraints : undefined;
+
+        // For FieldKey/FieldType bounds, we need to substitute type vars and then
+        // resolve to a Literal union before checking assignability.
+        let effectiveBoundType = destType.shared.boundType;
+        if (isFieldKeyOrFieldType && constraints) {
+            // Use solveAndApplyConstraints to substitute type vars in the bound
+            effectiveBoundType = evaluator.solveAndApplyConstraints(effectiveBoundType, constraints);
+            // Then resolve FieldKey[T] to Literal union if possible
+            if (isClass(effectiveBoundType)) {
+                effectiveBoundType = resolveFieldKeyOrFieldType(effectiveBoundType);
+            }
+        }
 
         if (
             !evaluator.assignType(
-                destType.shared.boundType,
+                effectiveBoundType,
                 evaluator.makeTopLevelTypeVarsConcrete(updatedType),
                 diag?.createAddendum(),
                 effectiveConstraints,
@@ -966,7 +983,7 @@ function assignUnconstrainedTypeVar(
                 diag?.addMessage(
                     LocAddendum.typeBound().format({
                         sourceType: evaluator.printType(updatedType),
-                        destType: evaluator.printType(destType.shared.boundType),
+                        destType: evaluator.printType(effectiveBoundType),
                         name: TypeVarType.getReadableName(destType),
                     })
                 );

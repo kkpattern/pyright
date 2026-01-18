@@ -53,6 +53,7 @@ import {
     isClassInstance,
     isInstantiableClass,
     isNever,
+    isTypeVar,
     maxTypeRecursionCount,
     NeverType,
     OverloadedType,
@@ -1521,9 +1522,15 @@ export function getTypeOfIndexedTypedDict(
     let diag = new DiagnosticAddendum();
     let allDiagsInvolveNotRequiredKeys = true;
 
-    const resultingType = mapSubtypes(indexType, (subtype) => {
+    const validateTypedDictIndexType = (subtype: Type): Type => {
         if (isAnyOrUnknown(subtype)) {
             return subtype;
+        }
+
+        if (isTypeVar(subtype)) {
+            if (subtype.shared.boundType) {
+                return mapSubtypes(subtype.shared.boundType, validateTypedDictIndexType);
+            }
         }
 
         if (isClassInstance(subtype) && ClassType.isBuiltIn(subtype, 'str')) {
@@ -1580,7 +1587,9 @@ export function getTypeOfIndexedTypedDict(
         diag.addMessage(LocAddendum.typeNotStringLiteral().format({ type: evaluator.printType(subtype) }));
         allDiagsInvolveNotRequiredKeys = false;
         return UnknownType.create();
-    });
+    };
+
+    const resultingType = mapSubtypes(indexType, validateTypedDictIndexType);
 
     // If we have an "expected type" diagnostic addendum (used for assignments),
     // use that rather than the local diagnostic information because it will

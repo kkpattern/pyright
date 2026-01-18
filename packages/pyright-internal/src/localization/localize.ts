@@ -499,9 +499,11 @@ export namespace Localizer {
         export const expectedImport = () => getRawString('Diagnostic.expectedImport');
         export const expectedImportAlias = () => getRawString('Diagnostic.expectedImportAlias');
         export const expectedImportSymbols = () => getRawString('Diagnostic.expectedImportSymbols');
-        export const expectedIndentedBlock = () => getRawString('Diagnostic.expectedIndentedBlock');
         export const expectedIn = () => getRawString('Diagnostic.expectedIn');
         export const expectedInExpr = () => getRawString('Diagnostic.expectedInExpr');
+        export const expectedIndentedBlock = () => getRawString('Diagnostic.expectedIndentedBlock');
+        export const expectedInstanceType = () =>
+            new ParameterizedString<{ type: string }>(getRawString('Diagnostic.expectedInstanceType'));
         export const expectedFunctionAfterAsync = () => getRawString('Diagnostic.expectedFunctionAfterAsync');
         export const expectedFunctionName = () => getRawString('Diagnostic.expectedFunctionName');
         export const expectedMemberName = () => getRawString('Diagnostic.expectedMemberName');
@@ -1051,6 +1053,12 @@ export namespace Localizer {
             new ParameterizedString<{ type: string }>(getRawString('Diagnostic.typeNotIntantiable'));
         export const typeNotIterable = () =>
             new ParameterizedString<{ type: string }>(getRawString('Diagnostic.typeNotIterable'));
+        export const typeNotSchema = () =>
+            new ParameterizedString<{ type: string }>(getRawString('Diagnostic.typeNotSchema'));
+        export const fieldTypeInvalidKey = () =>
+            new ParameterizedString<{ keyType: string; targetType: string }>(
+                getRawString('Diagnostic.fieldTypeInvalidKey')
+            );
         export const typeNotSpecializable = () =>
             new ParameterizedString<{ type: string }>(getRawString('Diagnostic.typeNotSpecializable'));
         export const typeNotSubscriptable = () =>

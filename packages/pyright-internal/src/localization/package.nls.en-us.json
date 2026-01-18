@@ -450,6 +450,7 @@
             "comment": "{Locked='in'}"
         },
         "expectedIndentedBlock": "Expected indented block",
+        "expectedInstanceType": "Expected instance type but received \"{type}\"",
         "expectedMemberName": "Expected attribute name after \".\"",
         "expectedModuleName": "Expected module name",
         "expectedNameAfterAs": {
@@ -1393,6 +1394,8 @@
         },
         "typeNotIntantiable": "\"{type}\" cannot be instantiated",
         "typeNotIterable": "\"{type}\" is not iterable",
+        "typeNotSchema": "Type \"{type}\" is not a supported schema type",
+        "fieldTypeInvalidKey": "Type argument \"{keyType}\" must be a subtype of FieldKey[{targetType}]",
         "typeNotSpecializable": "Could not specialize type \"{type}\"",
         "typeNotSubscriptable": "Object of type \"{type}\" is not subscriptable",
         "typeNotSupportBinaryOperator": "Operator \"{operator}\" not supported for types \"{leftType}\" and \"{rightType}\"",

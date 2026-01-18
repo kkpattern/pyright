@@ -167,6 +167,7 @@ import * as ParseTreeUtils from './parseTreeUtils';
 import { assignTypeToPatternTargets, checkForUnusedPattern, narrowTypeBasedOnPattern } from './patternMatching';
 import { assignProperty } from './properties';
 import { assignClassToProtocol, assignModuleToProtocol } from './protocols';
+import * as SchemaUtils from './schemaUtils';
 import { Scope, ScopeType, SymbolWithScope } from './scope';
 import * as ScopeUtils from './scopeUtils';
 import { createSentinelType } from './sentinel';
@@ -428,7 +429,7 @@ interface AliasMapEntry {
     implicitBaseClass?: string;
     isSpecialForm?: boolean;
     isIllegalInIsinstance?: boolean;
-    typeParamVariance?: Variance;
+    typeParamVariances?: Variance[];
 }
 
 interface AssignClassToSelfInfo {
@@ -7837,13 +7838,21 @@ export function createTypeEvaluator(
                         AnalyzerNodeInfo.getFileInfo(node).diagnosticRuleSet.enableExperimentalFeatures &&
                         ClassType.isBuiltIn(concreteSubtype, 'TypedDict');
 
-                    let typeArgs = getTypeArgs(node, flags, {
-                        isAnnotatedClass,
-                        hasCustomClassGetItem: hasCustomClassGetItem || !isGenericClass,
-                        isFinalAnnotation,
-                        isClassVarAnnotation,
-                        supportsTypedDictTypeArg,
-                    });
+                    const isFieldKeyOrType =
+                        isInstantiableClass(concreteSubtype) &&
+                        ClassType.isBuiltIn(concreteSubtype, ['FieldKey', 'FieldType']);
+
+                    let typeArgs = getTypeArgs(
+                        node,
+                        flags | (isFieldKeyOrType ? EvalFlags.AllowTypeVarWithoutScopeId : 0),
+                        {
+                            isAnnotatedClass,
+                            hasCustomClassGetItem: hasCustomClassGetItem || !isGenericClass,
+                            isFinalAnnotation,
+                            isClassVarAnnotation,
+                            supportsTypedDictTypeArg,
+                        }
+                    );
 
                     if (!isAnnotatedClass) {
                         typeArgs = adjustTypeArgsForTypeVarTuple(typeArgs, concreteSubtype.shared.typeParams, node);
@@ -16633,6 +16642,235 @@ export function createTypeEvaluator(
         return unionType;
     }
 
+    function createFieldKeyType(
+        classType: ClassType,
+        errorNode: ParseNode,
+        typeArgs: TypeResultWithNode[] | undefined
+    ): Type {
+        if (!typeArgs || typeArgs.length !== 1) {
+            addDiagnostic(
+                DiagnosticRule.reportInvalidTypeForm,
+                LocMessage.typeArgsMismatchOne().format({ received: typeArgs?.length ?? 0 }),
+                errorNode
+            );
+            return UnknownType.create();
+        }
+
+        let typeArg = typeArgs[0].type;
+        typeArg = convertToInstance(typeArg);
+
+        if (isAnyOrUnknown(typeArg)) {
+            return prefetched?.strClass && isInstantiableClass(prefetched.strClass)
+                ? prefetched.strClass
+                : AnyType.create();
+        }
+
+        // Reject FieldKey[type[X]]
+        // We need to check if any of the subtypes are instantiable classes.
+        let hasInstantiable = false;
+        doForEachSubtype(typeArg, (subtype) => {
+            if (isClass(subtype) && TypeBase.isInstantiable(subtype)) {
+                hasInstantiable = true;
+            }
+        });
+
+        if (hasInstantiable) {
+            addDiagnostic(
+                DiagnosticRule.reportGeneralTypeIssues,
+                LocMessage.expectedInstanceType().format({ type: printType(typeArgs[0].type) }),
+                typeArgs[0].node
+            );
+            return UnknownType.create();
+        }
+
+        // If the type argument contains a TypeVar, we cannot resolve the field names
+        // at definition time. Return a specialized FieldKey[T] type that will be
+        // resolved after type variable substitution.
+        if (requiresSpecialization(typeArg)) {
+            return ClassType.specialize(classType, [typeArg]);
+        }
+
+        const schemaNames = SchemaUtils.getSchemaFieldNames(evaluatorInterface, typeArg);
+        if (schemaNames === undefined) {
+            addDiagnostic(
+                DiagnosticRule.reportGeneralTypeIssues,
+                LocMessage.typeNotSchema().format({ type: printType(typeArg) }),
+                typeArgs[0].node
+            );
+            return UnknownType.create();
+        }
+
+        if (schemaNames.length === 0) {
+            return NeverType.createNever();
+        }
+
+        const literalTypes = schemaNames.map((name) => {
+            return cloneBuiltinClassWithLiteral(errorNode, classType, 'str', name);
+        });
+        return combineTypes(literalTypes);
+    }
+
+    function createFieldTypeType(
+        classType: ClassType,
+        errorNode: ParseNode,
+        typeArgs: TypeResultWithNode[] | undefined
+    ): Type {
+        // FieldType requires exactly two type arguments: T (target type) and K (key type)
+        if (!typeArgs || typeArgs.length !== 2) {
+            addDiagnostic(
+                DiagnosticRule.reportInvalidTypeForm,
+                LocMessage.typeArgsTooMany().format({
+                    name: 'FieldType',
+                    expected: 2,
+                    received: typeArgs?.length ?? 0,
+                }),
+                errorNode
+            );
+            return UnknownType.create();
+        }
+
+        let targetType = typeArgs[0].type;
+        let keyType = typeArgs[1].type;
+
+        targetType = convertToInstance(targetType);
+        keyType = convertToInstance(keyType);
+
+        // Special case: FieldType[Any, K] -> Any
+        if (isAnyOrUnknown(targetType)) {
+            return AnyType.create();
+        }
+
+        // Special case: FieldType[T, Any] -> Any
+        if (isAnyOrUnknown(keyType)) {
+            return AnyType.create();
+        }
+
+        // Special case: FieldType[T, Never] -> Never
+        if (isNever(keyType)) {
+            return NeverType.createNever();
+        }
+
+        // If either type argument contains a TypeVar that requires specialization,
+        // return a specialized FieldType[T, K] type that will be resolved after
+        // type variable substitution.
+        if (requiresSpecialization(targetType) || requiresSpecialization(keyType)) {
+            return ClassType.specialize(classType, [targetType, keyType]);
+        }
+
+        // Validate T is a schema type
+        const schemaNames = SchemaUtils.getSchemaFieldNames(evaluatorInterface, targetType);
+        if (schemaNames === undefined) {
+            addDiagnostic(
+                DiagnosticRule.reportGeneralTypeIssues,
+                LocMessage.typeNotSchema().format({ type: printType(targetType) }),
+                typeArgs[0].node
+            );
+            return UnknownType.create();
+        }
+
+        // Extract literal string values from keyType to validate and compute field types
+        const keyNames = extractLiteralStrings(keyType);
+
+        if (keyNames === undefined) {
+            // Key type cannot be reduced to literal strings.
+            // Check if it's a string type or a TypeVar that could be a valid key.
+            // If so, return a specialized FieldType that will resolve later.
+            // Otherwise, it's an error.
+
+            // Check if keyType is compatible with str (could be a valid key at runtime)
+            const isStringCompatible = isClassInstance(keyType) && ClassType.isBuiltIn(keyType, 'str');
+            const isTypeVarWithFieldKeyBound = isTypeVar(keyType) && keyType.shared.boundType !== undefined;
+
+            if (isStringCompatible || isTypeVarWithFieldKeyBound) {
+                // Return specialized FieldType - will be resolved after substitution
+                return ClassType.specialize(classType, [targetType, keyType]);
+            }
+
+            // For other cases, report an error
+            addDiagnostic(
+                DiagnosticRule.reportGeneralTypeIssues,
+                LocMessage.fieldTypeInvalidKey().format({
+                    keyType: printType(keyType),
+                    targetType: printType(targetType),
+                }),
+                typeArgs[1].node
+            );
+            return UnknownType.create();
+        }
+
+        // Validate that all keys are valid field names (K <: FieldKey[T])
+        const invalidKeys: string[] = [];
+        for (const keyName of keyNames) {
+            if (!schemaNames.includes(keyName)) {
+                invalidKeys.push(keyName);
+            }
+        }
+
+        if (invalidKeys.length > 0) {
+            addDiagnostic(
+                DiagnosticRule.reportGeneralTypeIssues,
+                LocMessage.fieldTypeInvalidKey().format({
+                    keyType: printType(keyType),
+                    targetType: printType(targetType),
+                }),
+                typeArgs[1].node
+            );
+            return UnknownType.create();
+        }
+
+        // Compute the union of field types for all specified keys
+        const fieldTypes: Type[] = [];
+        for (const keyName of keyNames) {
+            const fieldType = SchemaUtils.getSchemaFieldType(evaluatorInterface, targetType, keyName);
+            if (fieldType) {
+                fieldTypes.push(fieldType);
+            }
+        }
+
+        if (fieldTypes.length === 0) {
+            return NeverType.createNever();
+        }
+
+        // Convert to instantiable form since FieldType is used in type annotation contexts.
+        // This makes FieldType[User, Literal["id"]] equivalent to writing `int` directly
+        // in a type annotation.
+        return convertToInstantiable(combineTypes(fieldTypes));
+    }
+
+    // Helper function to extract literal string values from a type.
+    // Returns undefined if the type cannot be reduced to a finite set of literal strings.
+    function extractLiteralStrings(type: Type): string[] | undefined {
+        const result: string[] = [];
+
+        if (isClassInstance(type) && ClassType.isBuiltIn(type, 'str')) {
+            const literalValue = type.priv.literalValue;
+            if (typeof literalValue === 'string') {
+                result.push(literalValue);
+                return result;
+            }
+            // Non-literal string
+            return undefined;
+        }
+
+        if (isUnion(type)) {
+            for (const subtype of type.priv.subtypes) {
+                if (isClassInstance(subtype) && ClassType.isBuiltIn(subtype, 'str')) {
+                    const literalValue = subtype.priv.literalValue;
+                    if (typeof literalValue === 'string') {
+                        result.push(literalValue);
+                    } else {
+                        return undefined;
+                    }
+                } else {
+                    return undefined;
+                }
+            }
+            return result;
+        }
+
+        return undefined;
+    }
+
     // Creates a type that represents "Generic[T1, T2, ...]", used in the
     // definition of a generic class.
     function createGenericType(
@@ -16830,18 +17068,20 @@ export function createTypeEvaluator(
             specialClassType.shared.flags |= ClassTypeFlags.IllegalIsinstanceClass;
         }
 
-        // Synthesize a single type parameter with the specified variance if
+        // Synthesize type parameters with the specified variance if
         // specified in the alias map entry.
-        if (aliasMapEntry.typeParamVariance !== undefined) {
-            let typeParam = TypeVarType.createInstance('T');
-            typeParam = TypeVarType.cloneForScopeId(
-                typeParam,
-                ParseTreeUtils.getScopeIdForNode(node),
-                assignedName,
-                TypeVarScopeType.Class
-            );
-            typeParam.shared.declaredVariance = aliasMapEntry.typeParamVariance;
-            specialClassType.shared.typeParams.push(typeParam);
+        if (aliasMapEntry.typeParamVariances !== undefined) {
+            aliasMapEntry.typeParamVariances.forEach((variance, index) => {
+                let typeParam = TypeVarType.createInstance(`T${index > 0 ? index + 1 : ''}`);
+                typeParam = TypeVarType.cloneForScopeId(
+                    typeParam,
+                    ParseTreeUtils.getScopeIdForNode(node),
+                    assignedName,
+                    TypeVarScopeType.Class
+                );
+                typeParam.shared.declaredVariance = variance;
+                specialClassType.shared.typeParams.push(typeParam);
+            });
         }
 
         const specialBuiltInClassDeclaration = (AnalyzerNodeInfo.getDeclaration(node) ??
@@ -16937,7 +17177,7 @@ export function createTypeEvaluator(
                     module: 'builtins',
                     implicitBaseClass: 'bool',
                     isSpecialForm: true,
-                    typeParamVariance: Variance.Covariant,
+                    typeParamVariances: [Variance.Covariant],
                 },
             ],
             ['Unpack', { alias: '', module: 'builtins', isSpecialForm: true }],
@@ -16955,7 +17195,25 @@ export function createTypeEvaluator(
                     module: 'builtins',
                     implicitBaseClass: 'bool',
                     isSpecialForm: true,
-                    typeParamVariance: Variance.Invariant,
+                    typeParamVariances: [Variance.Invariant],
+                },
+            ],
+            [
+                'FieldKey',
+                {
+                    alias: '',
+                    module: 'builtins',
+                    isSpecialForm: true,
+                    typeParamVariances: [Variance.Covariant],
+                },
+            ],
+            [
+                'FieldType',
+                {
+                    alias: '',
+                    module: 'builtins',
+                    isSpecialForm: true,
+                    typeParamVariances: [Variance.Invariant, Variance.Invariant],
                 },
             ],
             [
@@ -16964,7 +17222,7 @@ export function createTypeEvaluator(
                     alias: '',
                     module: 'builtins',
                     isSpecialForm: true,
-                    typeParamVariance: Variance.Covariant,
+                    typeParamVariances: [Variance.Covariant],
                     isIllegalInIsinstance: true,
                 },
             ],
@@ -21341,6 +21599,14 @@ export function createTypeEvaluator(
                     return { type: createSpecialType(classType, typeArgs, 0) };
                 }
 
+                case 'FieldKey': {
+                    return { type: createFieldKeyType(classType, errorNode, typeArgs) };
+                }
+
+                case 'FieldType': {
+                    return { type: createFieldTypeType(classType, errorNode, typeArgs) };
+                }
+
                 case 'TypeForm': {
                     return { type: createTypeFormType(classType, errorNode, typeArgs) };
                 }
@@ -22702,7 +22968,12 @@ export function createTypeEvaluator(
                     typeExpression: true,
                 }).type;
 
-                if (requiresSpecialization(boundType, { ignorePseudoGeneric: true })) {
+                // Allow FieldKey[T] and FieldType[T, K] as TypeVar bounds since they are
+                // designed to work with type variables and will be resolved after substitution.
+                const isFieldKeyOrFieldType =
+                    isClass(boundType) && ClassType.isBuiltIn(boundType, ['FieldKey', 'FieldType']);
+
+                if (requiresSpecialization(boundType, { ignorePseudoGeneric: true }) && !isFieldKeyOrFieldType) {
                     addDiagnostic(
                         DiagnosticRule.reportGeneralTypeIssues,
                         LocMessage.typeVarConstraintGeneric(),
