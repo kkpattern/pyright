@@ -9,8 +9,104 @@
 
 import { ClassType, ClassTypeFlags, combineTypes, isClass, isClassInstance, isTypeVar, isUnion, Type } from './types';
 import { TypeEvaluator } from './typeEvaluatorTypes';
-import { getTypedDictMembersForClass } from './typedDicts';
+import { getTypedDictMembersForClass, getEffectiveExtraItemsEntryType } from './typedDicts';
 import { applySolvedTypeVars, buildSolutionFromSpecializedClass } from './typeUtils';
+import { AnyType } from './types';
+
+// Checks if a type is a TypedDict that permits extra keys (has extra_items or is open).
+// Returns the extra items value type if defined, or Any if the TypedDict is open without explicit extra_items.
+// Returns undefined if the type is not a TypedDict or if it's closed (no extra keys allowed).
+export function getTypedDictExtraItemsType(
+    evaluator: TypeEvaluator | undefined,
+    t: Type
+): Type | undefined {
+    if (isClass(t)) {
+        if (ClassType.isTypedDictClass(t)) {
+            // If it's explicitly marked closed=True, no extra keys allowed
+            if (ClassType.isTypedDictMarkedClosed(t)) {
+                return undefined;
+            }
+
+            // TypedDict permits extra keys - get the extra items type
+            if (evaluator) {
+                const entries = getTypedDictMembersForClass(evaluator, t);
+                if (entries.extraItems) {
+                    return entries.extraItems.valueType;
+                }
+                // Open TypedDict without explicit extra_items - return Any
+                return AnyType.create();
+            } else {
+                // Without evaluator, try to get from cached entries
+                const entries = t.shared.typedDictEntries;
+                if (entries?.extraItems) {
+                    return entries.extraItems.valueType;
+                }
+                // Can't determine - return undefined to indicate unknown
+                return undefined;
+            }
+        }
+    } else if (isUnion(t)) {
+        // For union types, combine the extra items types from all members
+        const types: Type[] = [];
+        for (const subtype of t.priv.subtypes) {
+            const extraType = getTypedDictExtraItemsType(evaluator, subtype);
+            if (extraType === undefined) {
+                // If any member doesn't permit extra keys, the union doesn't either
+                return undefined;
+            }
+            types.push(extraType);
+        }
+        return combineTypes(types);
+    } else if (isTypeVar(t)) {
+        if (t.shared.boundType) {
+            return getTypedDictExtraItemsType(evaluator, t.shared.boundType);
+        }
+    }
+
+    return undefined;
+}
+
+// Checks if a type permits extra keys (is an "open" TypedDict or has extra_items).
+// This is used by FieldType to determine if K can be any str subtype.
+// A TypedDict permits extra keys if:
+// - It has extra_items defined (TypedDictEffectivelyClosed is set but it has extra items)
+// - It is "open" (not TypedDictEffectivelyClosed and not TypedDictMarkedClosed)
+// A TypedDict does NOT permit extra keys if:
+// - It is explicitly marked closed=True (TypedDictMarkedClosed)
+export function permitsExtraKeys(evaluator: TypeEvaluator | undefined, t: Type): boolean {
+    if (isClass(t)) {
+        if (ClassType.isTypedDictClass(t)) {
+            // If it's explicitly marked closed=True, no extra keys allowed
+            if (ClassType.isTypedDictMarkedClosed(t)) {
+                return false;
+            }
+            // If it has extra_items defined, extra keys are allowed (with the extra_items type)
+            // We check this by looking at typedDictEntries or the typedDictExtraItemsExpr
+            if (t.shared.typedDictExtraItemsExpr) {
+                return true;
+            }
+            // If TypedDictEffectivelyClosed is not set, it's open (allows Any extra keys)
+            if (!ClassType.isTypedDictEffectivelyClosed(t)) {
+                return true;
+            }
+            // Otherwise, it's effectively closed without extra_items (closed=False not allowed with closed base)
+            return false;
+        }
+    } else if (isUnion(t)) {
+        // For union types, all members must permit extra keys
+        for (const subtype of t.priv.subtypes) {
+            if (!permitsExtraKeys(evaluator, subtype)) {
+                return false;
+            }
+        }
+        return true;
+    } else if (isTypeVar(t)) {
+        if (t.shared.boundType) {
+            return permitsExtraKeys(evaluator, t.shared.boundType);
+        }
+    }
+    return false;
+}
 
 export function isSchemaClassType(t: ClassType): boolean {
     if (ClassType.isDataClass(t)) {

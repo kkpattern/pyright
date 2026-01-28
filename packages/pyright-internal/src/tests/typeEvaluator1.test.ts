@@ -1246,3 +1246,23 @@ test('FieldType3', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldType3.py'], configOptions);
     TestUtils.validateResults(analysisResults, 3, 0);
 });
+
+test('FieldType4', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldType4.py'], configOptions);
+    // Expected errors:
+    // 1. safe_get(d, "naem") - typo, not in FieldKey[Data]
+    // 2. x1: FieldType[ClosedData, Literal["unknown"]] - closed TypedDict
+    // 3. strict_func(d, "undeclared") - not in FieldKey[Data]
+    TestUtils.validateResults(analysisResults, 3, 0);
+});
+
+test('FieldType5', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['fieldType5.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 0, 0);
+});

@@ -16768,6 +16768,9 @@ export function createTypeEvaluator(
             return UnknownType.create();
         }
 
+        // Check if target type permits extra keys (TypedDict with extra_items or open)
+        const targetPermitsExtraKeys = SchemaUtils.permitsExtraKeys(evaluatorInterface, targetType);
+
         // Extract literal string values from keyType to validate and compute field types
         const keyNames = extractLiteralStrings(keyType);
 
@@ -16780,6 +16783,42 @@ export function createTypeEvaluator(
             // Check if keyType is compatible with str (could be a valid key at runtime)
             const isStringCompatible = isClassInstance(keyType) && ClassType.isBuiltIn(keyType, 'str');
             const isTypeVarWithFieldKeyBound = isTypeVar(keyType) && keyType.shared.boundType !== undefined;
+            const isTypeVarWithStrBound =
+                isTypeVar(keyType) &&
+                keyType.shared.boundType &&
+                isClassInstance(keyType.shared.boundType) &&
+                ClassType.isBuiltIn(keyType.shared.boundType, 'str');
+
+            // Version 2: For TypedDict with extra keys, K can be any subtype of str
+            if (targetPermitsExtraKeys && isTypeVarWithStrBound) {
+                // Return specialized FieldType - will be resolved after substitution
+                return ClassType.specialize(classType, [targetType, keyType]);
+            }
+
+            // Version 2: For direct str key (not TypeVar) on TypedDict with extra keys,
+            // resolve immediately to union of all field types + extra_items
+            if (targetPermitsExtraKeys && isStringCompatible) {
+                const extraItemsType = SchemaUtils.getTypedDictExtraItemsType(evaluatorInterface, targetType);
+                const allFieldTypes: Type[] = [];
+                
+                // Add all declared field types
+                for (const fieldName of schemaNames) {
+                    const fieldType = SchemaUtils.getSchemaFieldType(evaluatorInterface, targetType, fieldName);
+                    if (fieldType) {
+                        allFieldTypes.push(fieldType);
+                    }
+                }
+                
+                // Add extra_items type
+                if (extraItemsType) {
+                    allFieldTypes.push(extraItemsType);
+                }
+                
+                if (allFieldTypes.length > 0) {
+                    return convertToInstantiable(combineTypes(allFieldTypes));
+                }
+                return NeverType.createNever();
+            }
 
             if (isStringCompatible || isTypeVarWithFieldKeyBound) {
                 // Return specialized FieldType - will be resolved after substitution
@@ -16799,14 +16838,19 @@ export function createTypeEvaluator(
         }
 
         // Validate that all keys are valid field names (K <: FieldKey[T])
+        // Version 2: For TypedDict with extra keys, invalid keys are allowed and resolve to extra_items type
         const invalidKeys: string[] = [];
+        const validKeys: string[] = [];
         for (const keyName of keyNames) {
             if (!schemaNames.includes(keyName)) {
                 invalidKeys.push(keyName);
+            } else {
+                validKeys.push(keyName);
             }
         }
 
-        if (invalidKeys.length > 0) {
+        // If there are invalid keys and target doesn't permit extra keys, report error
+        if (invalidKeys.length > 0 && !targetPermitsExtraKeys) {
             addDiagnostic(
                 DiagnosticRule.reportGeneralTypeIssues,
                 LocMessage.fieldTypeInvalidKey().format({
@@ -16820,10 +16864,20 @@ export function createTypeEvaluator(
 
         // Compute the union of field types for all specified keys
         const fieldTypes: Type[] = [];
-        for (const keyName of keyNames) {
+
+        // Add types for valid keys
+        for (const keyName of validKeys) {
             const fieldType = SchemaUtils.getSchemaFieldType(evaluatorInterface, targetType, keyName);
             if (fieldType) {
                 fieldTypes.push(fieldType);
+            }
+        }
+
+        // Version 2: For invalid keys on TypedDict with extra keys, use extra_items type
+        if (invalidKeys.length > 0 && targetPermitsExtraKeys) {
+            const extraItemsType = SchemaUtils.getTypedDictExtraItemsType(evaluatorInterface, targetType);
+            if (extraItemsType) {
+                fieldTypes.push(extraItemsType);
             }
         }
 

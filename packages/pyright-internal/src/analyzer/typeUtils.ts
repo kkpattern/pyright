@@ -134,6 +134,55 @@ export function resolveFieldKeyOrFieldType(classType: ClassType): Type {
         // by using buildSolutionFromSpecializedClass and applySolvedTypeVars.
         // We only skip resolution if the target type is not a valid schema type.
 
+        // Version 2: Check if target permits extra keys and key is a non-reducible str
+        const targetPermitsExtraKeys = SchemaUtils.permitsExtraKeys(undefined, targetType);
+        const keyIsStr =
+            isClassInstance(keyType) &&
+            ClassType.isBuiltIn(keyType, 'str') &&
+            keyType.priv.literalValue === undefined;
+        const keyIsTypeVarWithStrBound =
+            isTypeVar(keyType) &&
+            keyType.shared.boundType &&
+            isClassInstance(keyType.shared.boundType) &&
+            ClassType.isBuiltIn(keyType.shared.boundType, 'str');
+
+        if (targetPermitsExtraKeys && (keyIsStr || keyIsTypeVarWithStrBound)) {
+            // For TypedDict with extra keys and non-reducible str key:
+            // Return union of all field types + extra_items type (or Any if open)
+            const fieldNames = SchemaUtils.getSchemaFieldNamesWithoutEvaluator(targetType);
+            if (fieldNames !== undefined) {
+                const fieldTypes: Type[] = [];
+                for (const fieldName of fieldNames) {
+                    // Create a literal string type for this field name
+                    const strClassType = isClassInstance(keyType)
+                        ? keyType
+                        : isTypeVar(keyType) && keyType.shared.boundType && isClass(keyType.shared.boundType)
+                          ? ClassType.cloneAsInstance(keyType.shared.boundType)
+                          : undefined;
+                    if (strClassType) {
+                        const literalKeyType = ClassType.cloneWithLiteral(strClassType, fieldName);
+                        const fieldType = SchemaUtils.getSchemaFieldTypeForKey(targetType, literalKeyType);
+                        if (fieldType) {
+                            fieldTypes.push(fieldType);
+                        }
+                    }
+                }
+
+                // Add extra_items type if available
+                const extraItemsType = SchemaUtils.getTypedDictExtraItemsType(undefined, targetType);
+                if (extraItemsType) {
+                    fieldTypes.push(extraItemsType);
+                } else if (extraItemsType === undefined && targetPermitsExtraKeys) {
+                    // Open TypedDict without explicit extra_items - use Any
+                    fieldTypes.push(AnyType.create());
+                }
+
+                if (fieldTypes.length > 0) {
+                    return combineTypes(fieldTypes);
+                }
+            }
+        }
+
         // Get the field type(s) for the given key(s)
         const fieldType = SchemaUtils.getSchemaFieldTypeForKey(targetType, keyType);
         if (fieldType === undefined) {
