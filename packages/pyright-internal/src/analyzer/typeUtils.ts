@@ -129,6 +129,17 @@ export function resolveFieldKeyOrFieldType(classType: ClassType): Type {
         const targetType = typeArgs[0];
         const keyType = typeArgs[1];
 
+        // If keyType is a TypeVar bounded by FieldKey, we defer resolution
+        // to preserve the generic type until the TypeVar is specialized.
+        if (
+            isTypeVar(keyType) &&
+            keyType.shared.boundType &&
+            isClass(keyType.shared.boundType) &&
+            ClassType.isBuiltIn(keyType.shared.boundType, 'FieldKey')
+        ) {
+            return classType;
+        }
+
         // If target argument still requires specialization, we still try to resolve
         // the field type, because getSchemaFieldTypeForKey can handle unbound TypeVars
         // by using buildSolutionFromSpecializedClass and applySolvedTypeVars.

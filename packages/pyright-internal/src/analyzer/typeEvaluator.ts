@@ -24445,6 +24445,49 @@ export function createTypeEvaluator(
 
         // Is it a structural type (i.e. a protocol)? If so, we need to
         // perform a member-by-member check.
+        
+        // Handle FieldKey assignments
+        const isDestFieldKey = ClassType.isBuiltIn(destType, 'FieldKey');
+        const isSrcFieldKey = ClassType.isBuiltIn(srcType, 'FieldKey');
+        const isDestStr = ClassType.isBuiltIn(destType, 'str');
+        const isSrcStr = ClassType.isBuiltIn(srcType, 'str');
+
+        if (isSrcFieldKey && isDestStr) {
+            // FieldKey is always assignable to str
+            if ((flags & AssignTypeFlags.Invariant) === 0) {
+                return true;
+            }
+        }
+
+        if (isDestFieldKey && (isSrcStr || isSrcFieldKey)) {
+            const destLiteral = destType.priv.literalValue as string | undefined;
+            const srcLiteral = srcType.priv.literalValue as string | undefined;
+
+            // If dest is already a literal, assignType ensures srcLiteral == destLiteral.
+            // We just need to accept the class mismatch (str -> FieldKey).
+            if (destLiteral !== undefined) {
+                return true;
+            }
+
+            // If dest is NOT a literal (unresolved FieldKey[T]), check if srcLiteral is allowed.
+            if (srcLiteral !== undefined) {
+                const typeArg = destType.priv.typeArgs?.[0];
+                if (typeArg) {
+                    const allowedNames = SchemaUtils.getSchemaFieldNames(evaluatorInterface, typeArg);
+                    
+                    if (allowedNames && allowedNames.includes(srcLiteral)) {
+                        return true;
+                    }
+
+                    // If typeArg is a TypeVar, we optimistically allow the assignment.
+                    // The TypeVar might be substituted later or we are in a generic context.
+                    if (isTypeVar(typeArg)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
         const inheritanceChain: InheritanceChain = [];
         const isDerivedFrom = ClassType.isDerivedFrom(srcType, destType, inheritanceChain);
 
